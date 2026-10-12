@@ -1673,3 +1673,28 @@ body:has(.zp-notebook) {
 .zp-personal-plan .zp-placement {
   width: min(100%, calc(240px * var(--placement-aspect)));
 }
+
+.zp-theme-switch {
+  display: flex;
+  gap: 4px;
+  width: min(280px, calc(100% - 40px));
+  margin: 12px auto 0;
+  padding: 4px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.zp-theme-switch button {
+  flex: 1;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.zp-theme-switch button[aria-pressed="true"] {
+  background: var(--paper);
+  color: var(--accent);
+  box-shadow: 0 1px 4px #0000000d;
+}

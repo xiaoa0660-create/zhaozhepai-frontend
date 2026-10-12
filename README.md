@@ -10,7 +10,7 @@ React + TypeScript + Vite；Node≥22.18 用于构建，不是线上后端。
 上传此目录的源码 ZIP；安装 `npm ci`，构建 `npm run build`，静态发布目录 `dist`。
 开发预览 `npm run dev`（或 `npm start`）。请直接沿用现有产品，首轮只处理导入/构建兼容。
 
-首页右上角可切换两种风格。A：`/?theme=editorial`；B：`/?theme=notebook`。
+首页顶部「杂志版 / 笔记版」按钮可直接切换两种风格，保留当前操作进度；链接中的 theme 参数会同步更新，刷新后保留所选风格。A：`/?theme=editorial`；B：`/?theme=notebook`。
 同时保留 `/notebook.html` 与 `/compare.html` 作为可选入口。若平台只允许一个 HTML，优先保留首页的 query 风格入口。
 
 上传风景/参考、分类上传与个人参考管理、构图和姿态目标、光线建议、相机、本地 MediaPipe 检测、重拍、收藏、本机记录、下载、双风格用户手册均保留。

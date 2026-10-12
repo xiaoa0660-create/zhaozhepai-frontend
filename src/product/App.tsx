@@ -127,10 +127,16 @@ function Thumbnail({ reference, alt }: { reference: Reference; alt?: string }) {
   );
 }
 export default function ProductApp({
-  theme,
+  theme: initialTheme,
 }: {
   theme: "editorial" | "notebook";
 }) {
+  const [theme, setTheme] = useState<"editorial" | "notebook">(() => {
+    const requested = new URLSearchParams(location.search).get("theme");
+    return requested === "editorial" || requested === "notebook"
+      ? requested
+      : initialTheme;
+  });
   const [page, setPage] = useState<Page>("start"),
     [detail, setDetail] = useState<Reference | null>(null);
   const [listReturn, setListReturn] = useState<Page>("discover");
@@ -220,7 +226,10 @@ export default function ProductApp({
   }, [dirty, analysis]);
   useEffect(() => {
     document.title = `${page === "start" ? "开始拍" : page === "discover" ? "找参考" : page === "plan" ? "这张怎么拍" : "照着拍"} · ${theme === "editorial" ? "杂志版" : "笔记版"}`;
-    history.replaceState(null, "", `#${page}`);
+    const url = new URL(location.href);
+    url.searchParams.set("theme", theme);
+    url.hash = page;
+    history.replaceState(history.state, "", url);
   }, [page, theme]);
   async function refreshCards() {
     try {
@@ -582,23 +591,38 @@ export default function ProductApp({
         className={`v4-phone-shell zp-app zp-${theme} ${page === "camera" ? "zp-camera-active" : ""}`}
       >
         {page !== "camera" && (
-          <header className="zp-header">
-            <button
-              className="zp-brand"
-              onClick={() => guarded(() => go("start"))}
-            >
-              <span className="zp-logo">
-                <Camera size={20} />
-              </span>
-              照着拍<small>{theme === "editorial" ? "A" : "B"}</small>
-            </button>
-            <a className="zp-help" href={`./index.html?theme=${theme === "editorial" ? "notebook" : "editorial"}`}>
-              {theme === "editorial" ? "看笔记版" : "看杂志版"}
-            </a>
-            <a href={fullHelp} className="zp-help">
-              <BookOpen size={16} /> 怎么用
-            </a>
-          </header>
+          <>
+            <header className="zp-header">
+              <button
+                className="zp-brand"
+                onClick={() => guarded(() => go("start"))}
+              >
+                <span className="zp-logo">
+                  <Camera size={20} />
+                </span>
+                照着拍<small>{theme === "editorial" ? "A" : "B"}</small>
+              </button>
+              <a href={fullHelp} className="zp-help">
+                <BookOpen size={16} /> 怎么用
+              </a>
+            </header>
+            <div className="zp-theme-switch" role="group" aria-label="界面风格">
+              <button
+                type="button"
+                aria-pressed={theme === "editorial"}
+                onClick={() => setTheme("editorial")}
+              >
+                杂志版
+              </button>
+              <button
+                type="button"
+                aria-pressed={theme === "notebook"}
+                onClick={() => setTheme("notebook")}
+              >
+                笔记版
+              </button>
+            </div>
+          </>
         )}
         {error && (
           <div className="zp-alert" role="alert">

@@ -10,6 +10,6 @@ import "./product/product.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App theme={new URLSearchParams(location.search).get("theme") === "notebook" ? "notebook" : "editorial"} />
+    <App theme="editorial" />
   </React.StrictMode>,
 );
