@@ -15,12 +15,7 @@ import type { CSSProperties } from "react";
 import type { Photo } from "../lib/types";
 import type { Capture, LiveHint, Person } from "../domain/session";
 import { GROUPS } from "../domain/session";
-import {
-  HintStabilizer,
-  poseHint,
-  targetGroups,
-  targetPerson,
-} from "../domain/pose";
+import { HintStabilizer, targetGroups, targetPerson } from "../domain/pose";
 import { PoseClient } from "../lib/pose-client";
 import { capturedPhoto, drawCameraFrame } from "../lib/imaging";
 import { releasePhoto } from "../lib/images";
@@ -30,6 +25,12 @@ import type { Rect } from "../lib/types";
 import { activeLighting } from "../domain/lighting";
 import { LightInstructions } from "../components/LightPlan";
 import Modal from "../components/Modal";
+import {
+  alignmentProgress,
+  fieldHint,
+  reviseFieldPlan,
+} from "../domain/fieldwork";
+import { Director, LightTrials, ObstaclePicker } from "../product/FieldTools";
 
 const waiting: LiveHint = {
   key: "waiting",
@@ -45,13 +46,22 @@ export default function GuidedCamera({
   onBack,
   onCapture,
   onPrevious,
+  onUpdate,
+  initialTool,
 }: {
   onPrevious?: () => void;
   reference: Photo;
   target: Target;
   onBack: () => void;
   onCapture: (capture: Capture) => void;
+  onUpdate?: (target: Target) => void;
+  initialTool?: "light" | null;
 }) {
+  const [tool, setTool] = useState<"light" | "obstacle" | "director" | null>(
+    initialTool ?? null,
+  );
+  const targetRef = useRef(target);
+  targetRef.current = target;
   const [showLight, setShowLight] = useState(false);
   const lighting = activeLighting(target);
   const video = useRef<HTMLVideoElement>(null),
@@ -211,6 +221,7 @@ export default function GuidedCamera({
             if (!valid()) return;
             stabilizer.current.reset();
             setCurrent(null);
+            latestFraming.current = null;
             setHint({
               key: "stale",
               state: "uncertain",
@@ -230,12 +241,12 @@ export default function GuidedCamera({
             if (!valid()) return;
             setCurrent(result.people.length === 1 ? result.people[0] : null);
             latestFraming.current =
-              result.people.length === 1
+              result.people.length === 1 && result.people[0].confidence >= 0.55
                 ? { box: result.people[0].box, at: performance.now() }
                 : null;
             setHint(
               stabilizer.current.update(
-                poseHint(target, result.people),
+                fieldHint(targetRef.current, result.people),
                 performance.now(),
               ),
             );
@@ -295,7 +306,11 @@ export default function GuidedCamera({
     }
     void start();
     return stop;
-  }, [facing, attempt, paused, target]);
+  }, [facing, attempt, paused, target.aspect]);
+  useEffect(() => {
+    stabilizer.current.reset();
+    setHint(waiting);
+  }, [target.id]);
   useEffect(() => {
     stopVoice();
   }, [hint.key]);
@@ -346,6 +361,19 @@ export default function GuidedCamera({
       setSaving(false);
     }
   }
+  async function trialFrame() {
+    if (!video.current || !ready)
+      throw new Error("相机已暂停，请重新打开后试拍。");
+    const gen = generation.current;
+    const photo = await capturedPhoto(
+      drawCameraFrame(video.current, target.aspect, mirrored, 1200),
+    );
+    if (generation.current !== gen) {
+      releasePhoto(photo);
+      throw new Error("相机状态发生变化，请重新试拍。");
+    }
+    return photo;
+  }
   async function changeZoom(value: number) {
     const track = stream.current?.getVideoTracks()[0];
     if (!track) return;
@@ -386,6 +414,13 @@ export default function GuidedCamera({
     hint.state !== "uncertain" &&
     !(hint.actor === "拍摄的人" && hint.state === "adjust");
   const guide = ref ? aligned(ref) : null;
+  const alignment =
+    ready &&
+    current &&
+    current.confidence >= 0.55 &&
+    target.features.includes("composition")
+      ? alignmentProgress(box, current.box)
+      : [];
   return (
     <main
       className="v2-camera page-enter"
@@ -405,6 +440,35 @@ export default function GuidedCamera({
           aria-label={overlay ? "隐藏辅助线" : "显示辅助线"}
         >
           {overlay ? <Eye size={20} /> : <EyeOff size={20} />}
+        </button>
+      </div>
+      <div className="zp-camera-tools" aria-label="拍摄工具">
+        <button
+          disabled={!ready || !target.lighting?.setup}
+          onClick={() => {
+            stopVoice();
+            setTool("light");
+          }}
+        >
+          试一下光
+        </button>
+        {onUpdate && (
+          <button
+            onClick={() => {
+              stopVoice();
+              setTool("obstacle");
+            }}
+          >
+            这里拍不了
+          </button>
+        )}
+        <button
+          onClick={() => {
+            stopVoice();
+            setTool("director");
+          }}
+        >
+          导演口令
         </button>
       </div>
       <div className="v2-camera-layout">
@@ -458,6 +522,16 @@ export default function GuidedCamera({
                   width={box.width * 1000}
                   height={box.height * 1000}
                   className="v2-target-box"
+                />
+              )}
+              {current && alignment.length > 0 && (
+                <rect
+                  data-testid="live-current-box"
+                  x={current.box.x * 1000}
+                  y={current.box.y * 1000}
+                  width={current.box.width * 1000}
+                  height={current.box.height * 1000}
+                  className={`zp-current-box ${alignment.every((item) => item.matched) ? "matched" : ""}`}
                 />
               )}
               {guide &&
@@ -547,6 +621,35 @@ export default function GuidedCamera({
           )}
         </div>
         <aside className="v2-camera-guide">
+          {target.features.includes("composition") && (
+            <div className="zp-alignment" aria-label="构图对齐进度">
+              {(["人物大小", "左右位置", "上方留白"] as const).map(
+                (label, i) => (
+                  <span
+                    key={label}
+                    data-matched={alignment[i]?.matched ?? false}
+                    title={
+                      alignment[i]
+                        ? `当前约 ${Math.round(alignment[i].current * 100)}%，目标约 ${Math.round(alignment[i].target * 100)}%`
+                        : "等待可靠的人物范围"
+                    }
+                  >
+                    <i aria-hidden="true">
+                      {alignment[i]?.matched ? "✓" : "·"}
+                    </i>
+                    {label}
+                    <small>
+                      {alignment[i]
+                        ? alignment[i].matched
+                          ? "接近"
+                          : "待调整"
+                        : "待检测"}
+                    </small>
+                  </span>
+                ),
+              )}
+            </div>
+          )}
           <span className="eyebrow">拿手机的你 · 一次只调整一件事</span>
           <div className={`v2-live-hint ${hint.state}`} aria-live="polite">
             <span>
@@ -717,6 +820,65 @@ export default function GuidedCamera({
           <p className="v2-camera-footer">随时按快门，不必等到“完美”。</p>
         </aside>
       </div>
+      {tool === "obstacle" && onUpdate && (
+        <ObstaclePicker
+          target={target}
+          onClose={() => setTool(null)}
+          onApply={(patch) => {
+            onUpdate(reviseFieldPlan(target, patch));
+            setTool(null);
+          }}
+        />
+      )}
+      {tool === "light" && ready && target.lighting?.setup && (
+        <LightTrials
+          style={target.lighting.setup}
+          aspect={target.aspect}
+          media={stream.current}
+          ready={ready}
+          mirrored={mirrored}
+          capture={trialFrame}
+          onClose={() => setTool(null)}
+          onApply={(pose) => {
+            const style = target.lighting!.setup!;
+            if (onUpdate)
+              onUpdate(
+                reviseFieldPlan(target, {
+                  trial: { style, pose },
+                  interests: [
+                    ...new Set([
+                      ...(target.field?.interests ?? ["composition"]),
+                      "light" as const,
+                    ]),
+                  ],
+                }),
+              );
+            setTool(null);
+          }}
+        />
+      )}
+      {tool === "director" && (
+        <Director
+          target={target}
+          ready={ready && !saving}
+          onClose={() => setTool(null)}
+          onShutter={() => {
+            setTool(null);
+            void shutter();
+          }}
+          onAlternative={
+            onUpdate
+              ? () =>
+                  onUpdate(
+                    reviseFieldPlan(target, {
+                      action:
+                        target.field?.action === "hands" ? "turn" : "hands",
+                    }),
+                  )
+              : undefined
+          }
+        />
+      )}
       {showLight && target.lighting && (
         <Modal title="现场用光与站位" onClose={() => setShowLight(false)}>
           <div className="v4-camera-light-modal">

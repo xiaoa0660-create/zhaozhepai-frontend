@@ -1671,7 +1671,7 @@ body:has(.zp-notebook) {
 }
 
 .zp-personal-plan .zp-placement {
-  width: min(100%, calc(240px * var(--placement-aspect)));
+  width: min(100%, calc(226px * var(--placement-aspect)));
 }
 
 .zp-theme-switch {

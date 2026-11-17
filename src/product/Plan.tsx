@@ -25,6 +25,13 @@ import { LightInstructions } from "../components/LightPlan";
 import { LIGHT_RECIPES, type LightStyle } from "../domain/lighting";
 import type { Reference } from "./catalog";
 import { COMPOSITIONS, type SceneResult, type SceneVariant } from "./scene";
+import { InterestPicker, ObstaclePicker } from "./FieldTools";
+import {
+  applyFieldPlan,
+  interestsOf,
+  OBSTACLES,
+  type FieldChoices,
+} from "../domain/fieldwork";
 
 export function Placement({
   photo,
@@ -101,6 +108,7 @@ export default function Plan({
   onStart,
   onSave,
   onChange,
+  onTryLight,
 }: {
   photo: Photo;
   reference?: Reference;
@@ -112,6 +120,7 @@ export default function Plan({
   onStart: (target: NotebookTarget) => void;
   onSave: (target: NotebookTarget) => void;
   onChange: (target: NotebookTarget) => void;
+  onTryLight?: (target: NotebookTarget) => void;
 }) {
   const isScene = origin !== "reference";
   const knownReferenceLight =
@@ -140,19 +149,33 @@ export default function Plan({
   const [editor, setEditor] = useState(false),
     [advanced, setAdvanced] = useState(false);
   const [motion, setMotion] = useState<Motion>(
-    initial?.notebook?.motion ?? "none",
+    initial?.field?.baseline.motion ?? initial?.notebook?.motion ?? "none",
   );
   const [followPose, setFollowPose] = useState(
-    initial ? initial.groups.length > 0 : false,
+    initial
+      ? (initial.field?.baseline.groups ?? initial.groups).length > 0
+      : false,
   );
   const [light, setLight] = useState<LightStyle | null>(
-    initial?.lighting?.setup ??
+    initial?.field?.baseline.lighting?.setup ??
+      initial?.lighting?.setup ??
       sceneResult?.light.style ??
       knownReferenceLight ??
       null,
   );
   const [mirror, setMirror] = useState(initial?.mirror ?? false);
   const [custom, setCustom] = useState<NotebookTarget | null>(initial ?? null);
+  const [choices, setChoices] = useState<FieldChoices>(() =>
+    initial
+      ? { ...initial.field, interests: interestsOf(initial) }
+      : {
+          interests:
+            knownReferenceLight || sceneResult?.light.style
+              ? ["composition", "light"]
+              : ["composition"],
+        },
+  );
+  const [obstacleOpen, setObstacleOpen] = useState(false);
   const detectKey = `${photo.id}-${JSON.stringify(photo.crop)}`;
   const version = useRef(0);
   useEffect(() => {
@@ -223,7 +246,7 @@ export default function Plan({
   const available = usableGroups(person).filter(
     (g) => g === "left_arm" || g === "right_arm",
   );
-  const target: NotebookTarget = custom ?? {
+  const baseTarget: NotebookTarget = custom ?? {
     id: `plan-${photo.id}-${version.current}`,
     photoId: photo.id,
     revision: version.current,
@@ -252,6 +275,7 @@ export default function Plan({
       subjectAdvice: subject,
     },
   };
+  const target = applyFieldPlan(baseTarget, choices);
   const latest = useRef(onChange);
   latest.current = onChange;
   useEffect(() => {
@@ -261,6 +285,15 @@ export default function Plan({
     version.current++;
     setCustom(null);
     update();
+  }
+  function chooseField(patch: Partial<FieldChoices>) {
+    version.current++;
+    setCustom({
+      ...baseTarget,
+      id: crypto.randomUUID(),
+      revision: version.current,
+    });
+    setChoices((c) => ({ ...c, ...patch }));
   }
   function composition(id: SceneVariant["id"]) {
     change(() => {
@@ -376,6 +409,47 @@ export default function Plan({
           先自动确认人物，或点「调整人物范围」手动框一下。
         </p>
       )}
+      <section className="zp-field-section" aria-label="现场拍摄工具">
+        <InterestPicker
+          value={choices.interests}
+          onChange={(interests) => chooseField({ interests })}
+        />
+        <div className="zp-field-actions">
+          <button onClick={() => setObstacleOpen(true)}>这里拍不了？</button>
+          {onTryLight && (
+            <button
+              disabled={!confirmed || !target.lighting?.setup}
+              onClick={() => onTryLight(target)}
+            >
+              <Sun size={16} /> 先试一下光
+            </button>
+          )}
+        </div>
+        {!target.lighting?.setup && (
+          <p className="zp-caption">在下方选好现场光线，就能试拍三种明暗。</p>
+        )}
+        {choices.obstacle && (
+          <p className="zp-field-note" role="status">
+            已适配：{OBSTACLES.find((o) => o.id === choices.obstacle)?.label}
+            。上面的两人提示已更新。
+          </p>
+        )}
+        {target.field?.trial && (
+          <p className="zp-field-note">
+            已记住这次试光的方向，拍摄口令会沿用它。
+          </p>
+        )}
+      </section>
+      {obstacleOpen && (
+        <ObstaclePicker
+          target={target}
+          onClose={() => setObstacleOpen(false)}
+          onApply={(patch) => {
+            chooseField(patch);
+            setObstacleOpen(false);
+          }}
+        />
+      )}
       <details className="zp-details">
         <summary>
           <Sun size={17} /> 光线怎么用 <ChevronDown size={15} />
@@ -385,15 +459,29 @@ export default function Plan({
           现场光线
           <select
             aria-label="现场光线"
-            value={light ?? "unknown"}
+            value={target.lighting?.setup ?? "unknown"}
             onChange={(e) =>
-              change(() =>
+              change(() => {
                 setLight(
                   e.target.value === "unknown"
                     ? null
                     : (e.target.value as LightStyle),
-                ),
-              )
+                );
+                setChoices((c) => ({
+                  ...c,
+                  trial: undefined,
+                  fallbackLight: undefined,
+                  obstacle:
+                    c.obstacle === "window" || c.obstacle === "sun"
+                      ? undefined
+                      : c.obstacle,
+                  interests:
+                    e.target.value !== "unknown" &&
+                    !c.interests.includes("light")
+                      ? [...c.interests, "light"]
+                      : c.interests,
+                }));
+              })
             }
           >
             <option value="unknown">还不确定，先拍一张看看</option>
@@ -468,7 +556,19 @@ export default function Plan({
               <input
                 type="checkbox"
                 checked={followPose}
-                onChange={(e) => change(() => setFollowPose(e.target.checked))}
+                onChange={(e) =>
+                  change(() => {
+                    setFollowPose(e.target.checked);
+                    if (e.target.checked)
+                      setChoices((c) => ({
+                        ...c,
+                        action: undefined,
+                        interests: [
+                          ...new Set([...c.interests, "pose" as const]),
+                        ],
+                      }));
+                  })
+                }
               />{" "}
               参考照片里的手臂动作
             </label>
@@ -495,6 +595,14 @@ export default function Plan({
             onChange={(e) =>
               change(() => {
                 setMotion(e.target.value as Motion);
+                setChoices((c) => ({
+                  ...c,
+                  action: undefined,
+                  interests:
+                    e.target.value !== "none"
+                      ? [...new Set([...c.interests, "pose" as const])]
+                      : c.interests,
+                }));
                 if (e.target.value !== "none") setFollowPose(false);
               })
             }
@@ -541,6 +649,7 @@ export default function Plan({
               const brief = shootingBrief(t);
               setCustom({
                 ...t,
+                field: undefined,
                 notebook: {
                   ...target.notebook,
                   ...t.notebook,
@@ -548,6 +657,9 @@ export default function Plan({
                   cameraAdvice: brief.camera,
                   subjectAdvice: brief.subject,
                 },
+              });
+              setChoices({
+                interests: interestsOf({ ...t, field: undefined }),
               });
               setAdvanced(false);
               window.scrollTo({ top: 0, behavior: "smooth" });

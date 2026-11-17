@@ -49,6 +49,8 @@ import Plan, { Placement } from "./Plan";
 import { LAKE_EXAMPLE, sceneResultSchema, type SceneResult } from "./scene";
 import GuidedCamera from "../notebook/GuidedCamera";
 import PhotoResult from "../notebook/PhotoResult";
+import ScenePlay from "./ScenePlay";
+import "./fieldwork.css";
 import {
   deleteCard,
   listCards,
@@ -66,6 +68,7 @@ type Page =
   | "camera"
   | "result"
   | "favorites"
+  | "play"
   | "mine";
 type Origin = "reference" | "ai" | "manual" | "example";
 type Shot = { capture: Capture; target: NotebookTarget };
@@ -165,6 +168,8 @@ export default function ProductApp({
     [initial, setInitial] = useState<NotebookTarget | null>(null);
   const [shots, setShots] = useState<Shot[]>([]),
     [selectedShot, setSelectedShot] = useState(0);
+  const [cameraTool, setCameraTool] = useState<"light" | null>(null);
+  const [playDirty, setPlayDirty] = useState(false);
   const [busy, setBusy] = useState(false),
     [status, setStatus] = useState(""),
     [error, setError] = useState("");
@@ -198,10 +203,13 @@ export default function ProductApp({
   ];
   const currentShot = shots[selectedShot];
   const dirty =
-    !!photo &&
-    (page === "plan" || page === "result") &&
-    ((page === "result" ? currentShot?.target.id : target?.id) !== savedPlan ||
-      (!!currentShot && savedCapture !== currentShot.capture.id));
+    page === "play"
+      ? playDirty
+      : !!photo &&
+        (page === "plan" || page === "result") &&
+        ((page === "result" ? currentShot?.target.id : target?.id) !==
+          savedPlan ||
+          (!!currentShot && savedCapture !== currentShot.capture.id));
   useEffect(() => {
     void refreshCards();
     void refreshPersonal();
@@ -275,6 +283,7 @@ export default function ProductApp({
     setReference(undefined);
     setShots([]);
     setSelectedShot(0);
+    setCameraTool(null);
     setSavedPlan("");
     setSavedCapture("");
     handed.current = false;
@@ -461,7 +470,8 @@ export default function ProductApp({
     setOrigin("example");
     go("plan");
   }
-  function begin(t: NotebookTarget) {
+  function begin(t: NotebookTarget, tool: "light" | null = null) {
+    setCameraTool(tool);
     setTarget(t);
     setInitial(t);
     if (!handed.current) setHandoff(true);
@@ -469,6 +479,7 @@ export default function ProductApp({
   }
   function captured(capture: Capture) {
     if (!target) return;
+    setCameraTool(null);
     const next = [{ capture, target }, ...shots].slice(0, 6);
     if (shots.length === 6) releasePhoto(shots[5].capture.photo);
     setShots(next);
@@ -697,6 +708,20 @@ export default function ProductApp({
                 <ChevronRight size={19} />
               </button>
             </section>
+            <button
+              className="zp-play-entry"
+              onClick={() => {
+                setPlayDirty(false);
+                go("play");
+              }}
+            >
+              <span>
+                <span className="zp-step">15 秒 · 一镜到底</span>
+                <b>入戏一下</b>
+                <small>眼前的场景，也能演成一个小故事。</small>
+              </span>
+              <ArrowRight size={22} />
+            </button>
             {intro ? (
               <section className="zp-onboarding">
                 <div>
@@ -755,6 +780,12 @@ export default function ProductApp({
               照片不用一模一样。两个人喜欢，就很好。
             </p>
           </main>
+        )}
+        {page === "play" && (
+          <ScenePlay
+            onBack={() => guarded(() => go("start"))}
+            onDirty={setPlayDirty}
+          />
         )}
         {(page === "discover" || page === "favorites") && (
           <main className="zp-page page-enter">
@@ -1124,7 +1155,8 @@ export default function ProductApp({
                   );
                 })
               }
-              onStart={begin}
+              onStart={(t) => begin(t)}
+              onTryLight={(t) => begin(t, "light")}
               onSave={(t) => void save(t)}
               onChange={setTarget}
             />
@@ -1142,6 +1174,11 @@ export default function ProductApp({
           <GuidedCamera
             reference={photo}
             target={target}
+            initialTool={cameraTool}
+            onUpdate={(next) => {
+              setTarget(next);
+              setInitial(next);
+            }}
             onBack={() => {
               setInitial(target);
               go("plan");
@@ -1451,14 +1488,21 @@ export default function ProductApp({
         )}
         {leave && (
           <Modal
-            title="离开前，要留下这次拍摄吗？"
+            title={
+              page === "play"
+                ? "短片还没下载，要离开吗？"
+                : "离开前，要留下这次拍摄吗？"
+            }
             onClose={() => setLeave(null)}
           >
             <div className="zp-leave">
               <p>
-                这次的照片或拍法还没有明确保存。保存后，可以从「我的拍摄」继续。
+                {page === "play"
+                  ? "离开会停止录制并清除本次短片。可以返回录制页，先下载喜欢的片段。"
+                  : "这次的照片或拍法还没有明确保存。保存后，可以从「我的拍摄」继续。"}
               </p>
               <button
+                hidden={page === "play"}
                 className="zp-primary"
                 disabled={busy || !target}
                 onClick={async () => {

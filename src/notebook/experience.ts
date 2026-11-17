@@ -3,6 +3,7 @@ import type { LightStyle } from "../domain/lighting.ts";
 import { applyFeedback } from "../domain/collaboration.ts";
 import { describeTarget } from "../domain/interpretation.ts";
 import type { SceneResult } from "../product/scene.ts";
+import type { FieldPlan } from "../domain/fieldwork.ts";
 
 export const MOTIONS = {
   none: {
@@ -62,6 +63,7 @@ export type Scene = {
   approach: "here" | "closer";
 };
 export type NotebookTarget = Target & {
+  field?: FieldPlan;
   notebook?: {
     motion: Motion;
     scene?: Scene;
@@ -156,10 +158,13 @@ export function nextTarget(
   };
   if (["smaller", "larger", "background", "free-pose"].includes(change)) {
     const next = applyFeedback(target, capture, change as Feedback);
-    return {
-      ...next,
-      notebook: { ...notebook, retryTip: next.adjustment?.note },
-    };
+    return rebaseAfterRetake(
+      {
+        ...next,
+        notebook: { ...notebook, retryTip: next.adjustment?.note },
+      },
+      change,
+    );
   }
   const retryTip =
     change === "natural"
@@ -186,5 +191,54 @@ export function nextTarget(
     },
   };
   next.text = `${describeTarget(next)} ${retryTip}`;
+  return rebaseAfterRetake(next, change);
+}
+
+// The new shot becomes the starting point; later field edits must not revive older instructions.
+function rebaseAfterRetake(
+  target: NotebookTarget,
+  change: NextChange,
+): NotebookTarget {
+  if (!target.field) return target;
+  const next = {
+    ...target,
+    field: {
+      ...target.field,
+      obstacle: undefined,
+      fallbackLight: undefined,
+      action: undefined,
+      baseline: {
+        ...target.field.baseline,
+        camera:
+          target.notebook?.cameraAdvice ??
+          target.preparation[0] ??
+          target.field.baseline.camera,
+        subject:
+          target.notebook?.subjectAdvice ??
+          target.preparation[1] ??
+          target.field.baseline.subject,
+        motion: target.notebook?.motion ?? "none",
+        groups: [...target.groups],
+        features: [...target.features],
+        lighting: target.lighting,
+      },
+    },
+  };
+  if (change === "natural" || change === "free-pose") {
+    next.field.baseline.groups = [];
+    if (change === "natural")
+      next.field.interests = [
+        ...new Set([...next.field.interests, "pose" as const]),
+      ];
+  }
+  if (change === "dark") {
+    next.field.trial = undefined;
+    next.field.baseline.subject =
+      "让脸稍转向现场亮处，保留脸颊细节，先拍一张看看。";
+    next.notebook = {
+      ...next.notebook!,
+      subjectAdvice: next.field.baseline.subject,
+    };
+  }
   return next;
 }
